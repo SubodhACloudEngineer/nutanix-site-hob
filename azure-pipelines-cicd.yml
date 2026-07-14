@@ -1,0 +1,229 @@
+# HOB SITE — CI-CD PIPELINE (DEPLOYS REAL CHANGES)
+# ─────────────────────────────────────────────────────────────────────────
+# Trigger:  Manual trigger OR merge to main
+# Purpose:  Controlled deployment with environment-based approval gate.
+#           What the reviewer approves is EXACTLY what gets applied
+#           (frozen plan artifact — no re-planning at apply time).
+#
+# APPROVAL TIERS (Section 8.7.1 of design document):
+#   prd — Full team gate, 60-minute timeout
+#   acc — Single approver, 30-minute timeout
+#   tst — Auto-approve (gate disabled)
+#   dev — Auto-approve (gate disabled)
+#
+# BEFORE RUNNING: ensure the variable group 'nutanix-hob-credentials' exists
+# in ADO (Pipelines → Library) and contains:
+#   NUTANIX_USERNAME         — svc-terraform service account (from CyberArk)
+#   NUTANIX_PASSWORD         — service account password (from CyberArk)
+#   NUTANIX_ENDPOINT         — Prism Central VIP for HOB (OQ NW-02 pending)
+#   AZURE_SERVICE_CONNECTION — Azure RM service connection name
+#   BACKEND_RESOURCE_GROUP   — Storage account resource group (OQ-08 pending)
+#   BACKEND_STORAGE_ACCOUNT  — Storage account name (OQ-08 pending)
+#   INFRA_TEAM_EMAIL         — notification address for prd/acc approval gates
+# ─────────────────────────────────────────────────────────────────────────
+
+trigger: none
+
+parameters:
+  - name: environment
+    displayName: 'Target environment'
+    type: string
+    default: 'tst'
+    values:
+      - tst
+      - acc
+      - dev
+      - prd
+
+  - name: moduleVersion
+    displayName: 'nutanix_vm module version'
+    type: string
+    default: '1.0.0'
+
+  - name: action
+    displayName: 'Action'
+    type: string
+    default: 'apply'
+    values:
+      - apply
+      - destroy
+
+pool:
+  vmImage: ubuntu-latest
+
+# TODO: create this variable group in ADO (Pipelines → Library) and link it
+# to the Key Vault that holds the HOB credentials before running this pipeline.
+variables:
+  - group: nutanix-hob-credentials
+
+# ── Stage 1: Plan ─────────────────────────────────────────────────────────────
+
+stages:
+  - stage: Plan
+    displayName: 'Plan — ${{ parameters.environment }} (${{ parameters.action }})'
+    jobs:
+      - job: TerraformPlan
+        displayName: 'terraform plan'
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - template: deploy/step-terraform-download-module.yml
+            parameters:
+              feedId: '{TerraformModules.Nutanix}'
+              moduleVersion: ${{ parameters.moduleVersion }}
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+
+          - template: deploy/step-terraform-init.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              backendResourceGroup: $(BACKEND_RESOURCE_GROUP)
+              backendStorageAccount: $(BACKEND_STORAGE_ACCOUNT)
+              backendContainer: nutanix-${{ parameters.environment }}
+              backendKey: hob/${{ parameters.environment }}.tfstate
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+
+          - template: deploy/step-terraform-plan.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              environment: ${{ parameters.environment }}
+              varFile: config/${{ parameters.environment }}.tfvars
+              planArtifactName: tfplan-hob-${{ parameters.environment }}
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+              nutanixEndpoint: $(NUTANIX_ENDPOINT)
+              nutanixUsername: $(NUTANIX_USERNAME)
+              nutanixPassword: $(NUTANIX_PASSWORD)
+              ${{ if eq(parameters.action, 'destroy') }}:
+                commandOptions: '-destroy -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan-hob-${{ parameters.environment }}.tfplan -var-file="config/${{ parameters.environment }}.tfvars"'
+
+# ── Stage 2: Approve (environment-based gate) ─────────────────────────────────
+
+  - stage: Approve
+    displayName: 'Approve — ${{ parameters.environment }}'
+    dependsOn: Plan
+    condition: succeeded()
+    jobs:
+      # prd: full team gate, 60-minute timeout
+      - ${{ if eq(parameters.environment, 'prd') }}:
+        - job: WaitForApproval
+          displayName: 'Awaiting production approval'
+          pool: server
+          steps:
+            - task: ManualValidation@0
+              displayName: 'Manual approval — HOB PRODUCTION'
+              timeoutInMinutes: 60
+              inputs:
+                notifyUsers: $(INFRA_TEAM_EMAIL)
+                instructions: |
+                  Review the plan artifact tfplan-hob-prd. Confirm all
+                  10 Nutanix categories are correct, especially Backup (drives Veeam).
+                  Confirm cluster and subnet are correct for HOB production.
+
+      # acc: single approver, 30-minute timeout
+      - ${{ if eq(parameters.environment, 'acc') }}:
+        - job: WaitForApproval
+          displayName: 'Awaiting acceptance approval'
+          pool: server
+          steps:
+            - task: ManualValidation@0
+              displayName: 'Manual approval — HOB ACCEPTANCE'
+              timeoutInMinutes: 30
+              inputs:
+                notifyUsers: $(INFRA_TEAM_EMAIL)
+                instructions: |
+                  Review the plan artifact tfplan-hob-acc before approving.
+                  Confirm all 10 Nutanix categories are correct, especially Backup (drives Veeam).
+                  Confirm cluster and subnet are correct for HOB acceptance.
+
+      # tst/dev: auto-approve — gate is a no-op succeed-immediately job
+      - ${{ if or(eq(parameters.environment, 'tst'), eq(parameters.environment, 'dev')) }}:
+        - job: AutoApprove
+          displayName: 'Auto-approve (${{ parameters.environment }} — gate disabled)'
+          steps:
+            - bash: echo "Environment ${{ parameters.environment }} does not require manual approval."
+              displayName: 'Gate skipped (auto-approve)'
+
+# ── Stage 3: Apply ────────────────────────────────────────────────────────────
+
+  - stage: Apply
+    displayName: 'Apply — ${{ parameters.environment }}'
+    dependsOn: Approve
+    condition: >-
+      and(
+        succeeded(),
+        or(
+          eq('${{ parameters.environment }}', 'tst'),
+          eq('${{ parameters.environment }}', 'dev'),
+          succeeded('Approve')
+        )
+      )
+    jobs:
+      - job: TerraformApply
+        displayName: 'terraform apply'
+        steps:
+          - checkout: self
+
+          - template: deploy/step-terraform-download-module.yml
+            parameters:
+              feedId: '{TerraformModules.Nutanix}'
+              moduleVersion: ${{ parameters.moduleVersion }}
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+
+          - template: deploy/step-terraform-init.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              backendResourceGroup: $(BACKEND_RESOURCE_GROUP)
+              backendStorageAccount: $(BACKEND_STORAGE_ACCOUNT)
+              backendContainer: nutanix-${{ parameters.environment }}
+              backendKey: hob/${{ parameters.environment }}.tfstate
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+
+          - template: deploy/step-terraform-apply.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              planArtifactName: tfplan-hob-${{ parameters.environment }}
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+              nutanixEndpoint: $(NUTANIX_ENDPOINT)
+              nutanixUsername: $(NUTANIX_USERNAME)
+              nutanixPassword: $(NUTANIX_PASSWORD)
+              sysprepWin2025: $(SYSPREP_WIN2025)
+              sysprepWin2022: $(SYSPREP_WIN2022)
+
+# ── Stage 4: Smoke Test ───────────────────────────────────────────────────────
+
+  - stage: SmokeTest
+    displayName: 'Smoke Test — ${{ parameters.environment }}'
+    dependsOn: Apply
+    condition: >-
+      and(
+        succeeded(),
+        ne('${{ parameters.action }}', 'destroy')
+      )
+    jobs:
+      - job: SmokeTest
+        displayName: 'Post-deploy smoke test'
+        steps:
+          - checkout: self
+
+          - bash: |
+              set -e
+              cd $(System.DefaultWorkingDirectory)/infra
+              VM_NAME=$(terraform output -raw vm_name 2>/dev/null || echo "")
+              VM_IP=$(terraform output -raw vm_ip 2>/dev/null || echo "")
+              echo "Detected VM: $VM_NAME ($VM_IP)"
+              echo "##vso[task.setvariable variable=VM_NAME]$VM_NAME"
+              echo "##vso[task.setvariable variable=VM_IP]$VM_IP"
+            displayName: 'Read VM outputs from Terraform state'
+
+          - bash: |
+              set -e
+              chmod +x scripts/smoke-test.sh
+              # os-type hardcoded to "windows" for HOB pilot.
+              # Sprint 3: make dynamic from module output.
+              ./scripts/smoke-test.sh \
+                --vm-name    "$(VM_NAME)" \
+                --vm-ip      "$(VM_IP)" \
+                --os-type    "windows" \
+                --is-override "false"
+            displayName: 'Run smoke test (RDP/naming check)'
+            continueOnError: true
