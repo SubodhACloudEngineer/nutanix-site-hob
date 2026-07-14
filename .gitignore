@@ -1,11 +1,16 @@
+# Module downloads — populated at pipeline build time, never committed
+infra/modules/
+
 # Terraform local state and cache
 .terraform/
 .terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 
-# Variable files containing secrets — use *.tfvars.example for committed templates
+# Variable files containing secrets — never commit root or infra-level tfvars
 *.tfvars
+# Exception: config/ holds non-sensitive environment inputs and IS committed
+!config/*.tfvars
 
 # Crash logs
 crash.log
