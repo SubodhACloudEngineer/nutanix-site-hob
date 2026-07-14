@@ -1,0 +1,116 @@
+# HOB SITE — VALIDATE PIPELINE
+# ─────────────────────────────────────────────────────────────────────────
+# Trigger:  Any PR to a feature branch (read-only — never applies changes)
+# Purpose:  Fast feedback loop. Shows the engineer exactly what Terraform
+#           would change before the PR is merged.
+#
+# BEFORE RUNNING: ensure the variable group 'nutanix-hob-credentials' exists
+# in ADO (Pipelines → Library) and contains:
+#   NUTANIX_USERNAME         — svc-terraform service account (from CyberArk)
+#   NUTANIX_PASSWORD         — service account password (from CyberArk)
+#   NUTANIX_ENDPOINT         — Prism Central VIP for HOB (OQ NW-02 pending)
+#   AZURE_SERVICE_CONNECTION — Azure RM service connection name
+#   BACKEND_RESOURCE_GROUP   — Storage account resource group (OQ-08 pending)
+#   BACKEND_STORAGE_ACCOUNT  — Storage account name (OQ-08 pending)
+# ─────────────────────────────────────────────────────────────────────────
+
+pr:
+  branches:
+    include:
+      - '*'
+  paths:
+    include:
+      - infra/**
+      - config/**
+      - deploy/**
+
+trigger: none
+
+parameters:
+  - name: environment
+    displayName: 'Target environment'
+    type: string
+    default: 'tst'
+    values:
+      - tst
+      - acc
+      - dev
+      - prd
+
+  - name: moduleVersion
+    displayName: 'nutanix_vm module version'
+    type: string
+    default: '1.0.0'
+
+pool:
+  vmImage: ubuntu-latest
+
+# TODO: create this variable group in ADO (Pipelines → Library) and link it
+# to the Key Vault that holds the HOB credentials before running this pipeline.
+variables:
+  - group: nutanix-hob-credentials
+
+stages:
+  - stage: Validate
+    displayName: 'Terraform Validate & Plan (read-only)'
+    jobs:
+      - job: TerraformValidate
+        displayName: 'Validate and plan for ${{ parameters.environment }}'
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - template: deploy/step-terraform-download-module.yml
+            parameters:
+              feedId: '{TerraformModules.Nutanix}'
+              moduleVersion: ${{ parameters.moduleVersion }}
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+
+          - template: deploy/step-terraform-init.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              backendResourceGroup: $(BACKEND_RESOURCE_GROUP)
+              backendStorageAccount: $(BACKEND_STORAGE_ACCOUNT)
+              backendContainer: nutanix-${{ parameters.environment }}
+              backendKey: hob/${{ parameters.environment }}.tfstate
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+
+          - template: deploy/step-terraform-plan.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              environment: ${{ parameters.environment }}
+              varFile: config/${{ parameters.environment }}.tfvars
+              planArtifactName: tfplan-hob-${{ parameters.environment }}
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+              nutanixEndpoint: $(NUTANIX_ENDPOINT)
+              nutanixUsername: $(NUTANIX_USERNAME)
+              nutanixPassword: $(NUTANIX_PASSWORD)
+
+          - bash: |
+              set -e
+
+              PLAN_LOG=$(az pipelines runs artifact download \
+                --artifact-name "tfplan-hob-${{ parameters.environment }}" \
+                --path "$(Pipeline.Workspace)" \
+                --run-id $(Build.BuildId) 2>/dev/null || true)
+
+              # Extract plan output from the most recent terraform plan task log
+              PLAN_OUTPUT=$(az pipelines runs logs show \
+                --run-id $(Build.BuildId) \
+                --query "[?contains(name, 'terraform plan')].content | [-1]" \
+                -o tsv 2>/dev/null \
+                | grep -A 1000 'Terraform will perform' \
+                | head -100 \
+                || echo "Plan output not available — check the pipeline log above.")
+
+              COMMENT_BODY="## Terraform Plan — HOB ${{ parameters.environment }}"$'\n'""\`\`\`"$'\n'"${PLAN_OUTPUT}"$'\n'"\`\`\`"
+
+              az repos pr comment create \
+                --id $(System.PullRequest.PullRequestId) \
+                --comment "${COMMENT_BODY}" \
+                --organization $(System.CollectionUri) \
+                --project "$(System.TeamProject)"
+            displayName: 'Post plan output as PR comment'
+            env:
+              AZURE_DEVOPS_EXT_PAT: $(System.AccessToken)
+            condition: and(succeeded(), ne(variables['System.PullRequest.PullRequestId'], ''))
