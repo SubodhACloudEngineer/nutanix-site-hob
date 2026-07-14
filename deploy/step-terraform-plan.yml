@@ -1,0 +1,64 @@
+parameters:
+  - name: workingDir
+    type: string
+    default: 'infra/'
+
+  - name: environment
+    type: string
+    displayName: 'Target environment (prd/acc/tst/dev)'
+
+  - name: varFile
+    type: string
+    displayName: 'Path to the .tfvars file (e.g. config/tst.tfvars)'
+
+  - name: planArtifactName
+    type: string
+    default: 'tfplan'
+
+  - name: serviceConnectionName
+    type: string
+    displayName: 'Azure RM service connection name'
+
+  - name: nutanixEndpoint
+    type: string
+    displayName: 'Prism Central VIP'
+
+  - name: nutanixUsername
+    type: string
+    displayName: 'Nutanix service account username'
+    secret: true
+
+  - name: nutanixPassword
+    type: string
+    displayName: 'Nutanix service account password'
+    secret: true
+
+steps:
+  - task: TerraformTaskV4@4
+    displayName: 'terraform validate'
+    inputs:
+      provider: azurerm
+      command: validate
+      workingDirectory: '${{ parameters.workingDir }}'
+
+  - task: TerraformTaskV4@4
+    displayName: 'terraform plan'
+    inputs:
+      provider: azurerm
+      command: plan
+      workingDirectory: '${{ parameters.workingDir }}'
+      commandOptions: >-
+        -input=false
+        -out=$(Build.ArtifactStagingDirectory)/${{ parameters.planArtifactName }}.tfplan
+        -var-file="${{ parameters.varFile }}"
+      environmentServiceNameAzureRM: '${{ parameters.serviceConnectionName }}'
+    env:
+      TF_VAR_nutanix_endpoint: ${{ parameters.nutanixEndpoint }}
+      TF_VAR_nutanix_username: ${{ parameters.nutanixUsername }}
+      TF_VAR_nutanix_password: ${{ parameters.nutanixPassword }}
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish plan artifact'
+    inputs:
+      pathToPublish: '$(Build.ArtifactStagingDirectory)'
+      artifactName: '${{ parameters.planArtifactName }}'

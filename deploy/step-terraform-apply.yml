@@ -1,0 +1,74 @@
+parameters:
+  - name: workingDir
+    type: string
+    default: 'infra/'
+
+  - name: planArtifactName
+    type: string
+    default: 'tfplan'
+
+  - name: serviceConnectionName
+    type: string
+    displayName: 'Azure RM service connection name'
+
+  - name: nutanixEndpoint
+    type: string
+    displayName: 'Prism Central VIP'
+
+  - name: nutanixUsername
+    type: string
+    displayName: 'Nutanix service account username'
+    secret: true
+
+  - name: nutanixPassword
+    type: string
+    displayName: 'Nutanix service account password'
+    secret: true
+
+  - name: sysprepWin2025
+    type: string
+    displayName: 'Sysprep unattend XML for Windows Server 2025'
+    secret: true
+
+  - name: sysprepWin2022
+    type: string
+    displayName: 'Sysprep unattend XML for Windows Server 2022'
+    secret: true
+
+  - name: sysprepRhel9
+    type: string
+    displayName: 'Cloud-init userdata for RHEL 9'
+    default: ''
+    secret: true
+
+  - name: sysprepRhel10
+    type: string
+    displayName: 'Cloud-init userdata for RHEL 10'
+    default: ''
+    secret: true
+
+steps:
+  - task: DownloadBuildArtifacts@1
+    displayName: 'Download approved plan artifact'
+    inputs:
+      buildType: current
+      artifactName: '${{ parameters.planArtifactName }}'
+      downloadPath: '$(Build.ArtifactStagingDirectory)'
+
+  - task: TerraformTaskV4@4
+    displayName: 'terraform apply'
+    inputs:
+      provider: azurerm
+      command: apply
+      workingDirectory: '${{ parameters.workingDir }}'
+      commandOptions: >-
+        -input=false
+        -auto-approve
+        $(Build.ArtifactStagingDirectory)/${{ parameters.planArtifactName }}/${{ parameters.planArtifactName }}.tfplan
+      environmentServiceNameAzureRM: '${{ parameters.serviceConnectionName }}'
+    env:
+      TF_VAR_nutanix_endpoint: ${{ parameters.nutanixEndpoint }}
+      TF_VAR_nutanix_username: ${{ parameters.nutanixUsername }}
+      TF_VAR_nutanix_password: ${{ parameters.nutanixPassword }}
+      TF_VAR_sysprep_win2025: ${{ parameters.sysprepWin2025 }}
+      TF_VAR_sysprep_win2022: ${{ parameters.sysprepWin2022 }}

@@ -1,0 +1,39 @@
+parameters:
+  - name: workingDir
+    type: string
+    default: 'infra/'
+
+  - name: backendResourceGroup
+    type: string
+
+  - name: backendStorageAccount
+    type: string
+
+  - name: backendContainer
+    type: string
+
+  - name: backendKey
+    type: string
+    displayName: 'State file key (e.g. hob/tst.tfstate)'
+
+  - name: serviceConnectionName
+    type: string
+    displayName: 'Azure RM service connection name'
+
+steps:
+  - task: TerraformInstaller@1
+    displayName: 'Install Terraform (latest)'
+    inputs:
+      terraformVersion: latest
+
+  - task: TerraformTaskV4@4
+    displayName: 'terraform init'
+    inputs:
+      provider: azurerm
+      command: init
+      workingDirectory: '${{ parameters.workingDir }}'
+      backendServiceArm: '${{ parameters.serviceConnectionName }}'
+      backendAzureRmResourceGroupName: '${{ parameters.backendResourceGroup }}'
+      backendAzureRmStorageAccountName: '${{ parameters.backendStorageAccount }}'
+      backendAzureRmContainerName: '${{ parameters.backendContainer }}'
+      backendAzureRmKey: '${{ parameters.backendKey }}'

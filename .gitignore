@@ -1,0 +1,22 @@
+# Terraform local state and cache
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+
+# Variable files containing secrets — use *.tfvars.example for committed templates
+*.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files (local developer customisations — never commit)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration files
+.terraformrc
+terraform.rc
