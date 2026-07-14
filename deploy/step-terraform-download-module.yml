@@ -1,0 +1,35 @@
+parameters:
+  - name: feedId
+    type: string
+    displayName: 'Azure Artifacts feed ID'
+
+  - name: moduleVersion
+    type: string
+    displayName: 'nutanix_vm module version to download'
+    default: '1.0.0'
+
+  - name: workingDir
+    type: string
+    default: '$(System.DefaultWorkingDirectory)/infra'
+
+steps:
+  - bash: |
+      mkdir -p ${{ parameters.workingDir }}/modules/nutanix_vm
+    displayName: 'Create module target directory'
+
+  - task: UniversalPackages@0
+    displayName: 'Download nutanix_vm module package'
+    inputs:
+      command: download
+      downloadDirectory: '${{ parameters.workingDir }}/modules'
+      vstsFeed: '${{ parameters.feedId }}'
+      vstsPackage: 'nutanix_vm'
+      vstsPackageVersion: '${{ parameters.moduleVersion }}'
+
+  - bash: |
+      set -e
+      cd ${{ parameters.workingDir }}/modules
+      unzip -q nutanix_vm.zip -d nutanix_vm_extracted
+      mv nutanix_vm_extracted/nutanix_vm/* nutanix_vm/
+      rm -rf nutanix_vm_extracted nutanix_vm.zip
+    displayName: 'Unpack nutanix_vm module'
