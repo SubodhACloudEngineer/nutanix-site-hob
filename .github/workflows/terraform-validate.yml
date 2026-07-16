@@ -1,0 +1,67 @@
+name: Terraform Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '.github/workflows/terraform-validate.yml'
+
+  push:
+    branches: [main]
+    paths:
+      - '**.tf'
+
+jobs:
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.0"
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+  validate-infra:
+    name: Validate infra/ module
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.0"
+
+      # Validates infra/ Terraform without connecting to Prism Central.
+      # The nutanix provider is downloaded from registry to check attribute names.
+      # Backend is skipped — no real state file needed for validation.
+      - name: terraform init (infra)
+        working-directory: infra
+        run: terraform init -backend=false
+
+      - name: terraform validate (infra)
+        working-directory: infra
+        run: terraform validate
+
+  summary:
+    name: Validation summary
+    runs-on: ubuntu-latest
+    needs: [fmt, validate-infra]
+    if: always()
+    steps:
+      - name: Report
+        run: |
+          echo "## Terraform Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| terraform fmt | ${{ needs.fmt.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| validate infra/ | ${{ needs.validate-infra.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_No Nutanix cluster or Azure credentials required for these checks._" >> $GITHUB_STEP_SUMMARY
