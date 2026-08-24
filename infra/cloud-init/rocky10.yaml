@@ -1,0 +1,20 @@
+#cloud-config
+# Minimal, safe cloud-init for the first HOB Rocky 10 test VM (hob-as-0001).
+#
+# PLAIN YAML — the nutanix_vm module base64-encodes this payload itself
+# (base64encode(var.cloud_init_userdata)), so it must NOT be pre-encoded here.
+# No SSH keys, passwords, or credentials of any kind are embedded.
+#
+# ${hostname} is injected by templatefile() from local.vm_name in main.tf, so
+# the guest hostname always matches the Terraform-computed VM name.
+
+hostname: ${hostname}
+preserve_hostname: false
+
+# qemu-guest-agent reports the guest IP back to Prism Central; the module's
+# vm_ip output and the pipeline smoke-test stage depend on it running.
+packages:
+  - qemu-guest-agent
+
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
