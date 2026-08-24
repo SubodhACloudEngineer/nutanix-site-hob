@@ -33,14 +33,10 @@ variable "nutanix_subnet_name" {
 
 # ── Injected as TF_VAR_* by pipeline (secrets — never in .tfvars files) ──────
 
-variable "nutanix_username" {
-  type      = string
-  sensitive = true
-}
-
-variable "nutanix_password" {
-  type      = string
-  sensitive = true
+variable "nutanix_api_key" {
+  description = "API key for Prism Central authentication. Sourced from Azure Key Vault secret api-<cluster-name> in the pipeline; supplied via TF_VAR_nutanix_api_key locally. Never commit a value."
+  type        = string
+  sensitive   = true
 }
 
 variable "nutanix_insecure" {

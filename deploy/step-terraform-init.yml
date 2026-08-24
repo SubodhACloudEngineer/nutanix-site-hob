@@ -3,18 +3,9 @@ parameters:
     type: string
     default: 'infra/'
 
-  - name: backendResourceGroup
+  - name: environment
     type: string
-
-  - name: backendStorageAccount
-    type: string
-
-  - name: backendContainer
-    type: string
-
-  - name: backendKey
-    type: string
-    displayName: 'State file key (e.g. hob/tst.tfstate)'
+    displayName: 'Target environment (prd/acc/tst/dev) — prefixes the state key'
 
   - name: serviceConnectionName
     type: string
@@ -22,9 +13,10 @@ parameters:
 
 steps:
   - task: TerraformInstaller@1
-    displayName: 'Install Terraform (latest)'
+    displayName: 'Install Terraform (1.9.8)'
     inputs:
-      terraformVersion: latest
+      # Pinned (not 'latest') so CI resolves the same Terraform build every run.
+      terraformVersion: 1.9.8
 
   - task: TerraformTaskV4@4
     displayName: 'terraform init'
@@ -33,7 +25,15 @@ steps:
       command: init
       workingDirectory: '${{ parameters.workingDir }}'
       backendServiceArm: '${{ parameters.serviceConnectionName }}'
-      backendAzureRmResourceGroupName: '${{ parameters.backendResourceGroup }}'
-      backendAzureRmStorageAccountName: '${{ parameters.backendStorageAccount }}'
-      backendAzureRmContainerName: '${{ parameters.backendContainer }}'
-      backendAzureRmKey: '${{ parameters.backendKey }}'
+      # One container per SITE ("hob"); the environment is a prefix in the
+      # state key (<environment>/nutanix-site-hob.tfstate).
+      # use_azuread_auth=true is required: the service principal has been
+      # granted a data-plane RBAC role and shared-key access is expected to be
+      # disabled on the storage account, so backend auth must go through
+      # Azure AD rather than a storage account key.
+      commandOptions: >-
+        -backend-config="resource_group_name=AZU-NUTANIX-RG-PRD"
+        -backend-config="storage_account_name=azunutanixsaprd"
+        -backend-config="container_name=hob"
+        -backend-config="key=${{ parameters.environment }}/nutanix-site-hob.tfstate"
+        -backend-config="use_azuread_auth=true"

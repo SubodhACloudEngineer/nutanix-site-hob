@@ -15,14 +15,9 @@ parameters:
     type: string
     displayName: 'Prism Central VIP'
 
-  - name: nutanixUsername
+  - name: nutanixApiKey
     type: string
-    displayName: 'Nutanix service account username'
-    secret: true
-
-  - name: nutanixPassword
-    type: string
-    displayName: 'Nutanix service account password'
+    displayName: 'Prism Central API key'
     secret: true
 
   - name: sysprepWin2025
@@ -67,8 +62,7 @@ steps:
         $(Build.ArtifactStagingDirectory)/${{ parameters.planArtifactName }}/${{ parameters.planArtifactName }}.tfplan
       environmentServiceNameAzureRM: '${{ parameters.serviceConnectionName }}'
     env:
-      TF_VAR_nutanix_endpoint: ${{ parameters.nutanixEndpoint }}
-      TF_VAR_nutanix_username: ${{ parameters.nutanixUsername }}
-      TF_VAR_nutanix_password: ${{ parameters.nutanixPassword }}
+      TF_VAR_nutanix_pc_endpoint: ${{ parameters.nutanixEndpoint }}
+      TF_VAR_nutanix_api_key: ${{ parameters.nutanixApiKey }}
       TF_VAR_sysprep_win2025: ${{ parameters.sysprepWin2025 }}
       TF_VAR_sysprep_win2022: ${{ parameters.sysprepWin2022 }}
