@@ -6,12 +6,12 @@
 #
 # BEFORE RUNNING: ensure the variable group 'nutanix-hob-credentials' exists
 # in ADO (Pipelines → Library) and contains:
-#   NUTANIX_USERNAME         — svc-terraform service account (from CyberArk)
-#   NUTANIX_PASSWORD         — service account password (from CyberArk)
+#   NUTANIX_API_KEY          — Prism Central API key (from Azure Key Vault)
 #   NUTANIX_ENDPOINT         — Prism Central VIP for HOB (OQ NW-02 pending)
 #   AZURE_SERVICE_CONNECTION — Azure RM service connection name
-#   BACKEND_RESOURCE_GROUP   — Storage account resource group (OQ-08 pending)
-#   BACKEND_STORAGE_ACCOUNT  — Storage account name (OQ-08 pending)
+# The backend resource group, storage account and container are hardcoded in
+# deploy/step-terraform-init.yml (AZU-NUTANIX-RG-PRD / azunutanixsaprd / hob),
+# so no BACKEND_* variables are required here.
 # ─────────────────────────────────────────────────────────────────────────
 
 pr:
@@ -40,10 +40,10 @@ parameters:
   - name: moduleVersion
     displayName: 'nutanix_vm module version'
     type: string
-    default: '1.0.0'
+    default: '2.0.1'
 
 pool:
-  vmImage: ubuntu-latest
+  name: CCoE_Linux
 
 # TODO: create this variable group in ADO (Pipelines → Library) and link it
 # to the Key Vault that holds the HOB credentials before running this pipeline.
@@ -69,10 +69,7 @@ stages:
           - template: deploy/step-terraform-init.yml
             parameters:
               workingDir: $(System.DefaultWorkingDirectory)/infra
-              backendResourceGroup: $(BACKEND_RESOURCE_GROUP)
-              backendStorageAccount: $(BACKEND_STORAGE_ACCOUNT)
-              backendContainer: nutanix-${{ parameters.environment }}
-              backendKey: hob/${{ parameters.environment }}.tfstate
+              environment: ${{ parameters.environment }}
               serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
 
           - template: deploy/step-terraform-plan.yml
@@ -83,8 +80,7 @@ stages:
               planArtifactName: tfplan-hob-${{ parameters.environment }}
               serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
               nutanixEndpoint: $(NUTANIX_ENDPOINT)
-              nutanixUsername: $(NUTANIX_USERNAME)
-              nutanixPassword: $(NUTANIX_PASSWORD)
+              nutanixApiKey: $(NUTANIX_API_KEY)
 
           - bash: |
               set -e
