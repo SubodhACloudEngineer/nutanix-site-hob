@@ -6,12 +6,14 @@
 #
 # BEFORE RUNNING: ensure the variable group 'nutanix-hob-credentials' exists
 # in ADO (Pipelines → Library) and contains:
-#   NUTANIX_API_KEY          — Prism Central API key (from Azure Key Vault)
 #   NUTANIX_ENDPOINT         — Prism Central VIP for HOB (OQ NW-02 pending)
 #   AZURE_SERVICE_CONNECTION — Azure RM service connection name
-# The backend resource group, storage account and container are hardcoded in
-# deploy/step-terraform-init.yml (AZU-NUTANIX-RG-PRD / azunutanixsaprd / hob),
-# so no BACKEND_* variables are required here.
+# The Prism Central API key is fetched at run time from Azure Key Vault
+# (azu-nutanix-kv-prd, secret api-<clusterName>) by the plan step template, not
+# from this variable group. The backend resource group, storage account and
+# container are hardcoded in deploy/step-terraform-init.yml
+# (AZU-NUTANIX-RG-PRD / azunutanixsaprd / hob), so no BACKEND_* variables are
+# required here.
 # ─────────────────────────────────────────────────────────────────────────
 
 pr:
@@ -40,7 +42,12 @@ parameters:
   - name: moduleVersion
     displayName: 'nutanix_vm module version'
     type: string
-    default: '2.0.1'
+    default: '2.0.3'
+
+  - name: clusterName
+    displayName: 'Cluster name (lowercase) — selects Key Vault secret api-<clusterName>'
+    type: string
+    default: 'hob-cl-dev1'
 
 pool:
   name: CCoE_Linux
@@ -62,7 +69,6 @@ stages:
 
           - template: deploy/step-terraform-download-module.yml
             parameters:
-              feedId: '{TerraformModules.Nutanix}'
               moduleVersion: ${{ parameters.moduleVersion }}
               workingDir: $(System.DefaultWorkingDirectory)/infra
 
@@ -80,7 +86,7 @@ stages:
               planArtifactName: tfplan-hob-${{ parameters.environment }}
               serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
               nutanixEndpoint: $(NUTANIX_ENDPOINT)
-              nutanixApiKey: $(NUTANIX_API_KEY)
+              clusterName: ${{ parameters.clusterName }}
 
           - bash: |
               set -e

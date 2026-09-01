@@ -13,13 +13,15 @@
 #
 # BEFORE RUNNING: ensure the variable group 'nutanix-hob-credentials' exists
 # in ADO (Pipelines → Library) and contains:
-#   NUTANIX_API_KEY          — Prism Central API key (from Azure Key Vault)
 #   NUTANIX_ENDPOINT         — Prism Central VIP for HOB (OQ NW-02 pending)
 #   AZURE_SERVICE_CONNECTION — Azure RM service connection name
 #   INFRA_TEAM_EMAIL         — notification address for prd/acc approval gates
-# The backend resource group, storage account and container are hardcoded in
-# deploy/step-terraform-init.yml (AZU-NUTANIX-RG-PRD / azunutanixsaprd / hob),
-# so no BACKEND_* variables are required here.
+# The Prism Central API key is fetched at run time from Azure Key Vault
+# (azu-nutanix-kv-prd, secret api-<clusterName>) by the plan and apply step
+# templates, not from this variable group. The backend resource group, storage
+# account and container are hardcoded in deploy/step-terraform-init.yml
+# (AZU-NUTANIX-RG-PRD / azunutanixsaprd / hob), so no BACKEND_* variables are
+# required here.
 # ─────────────────────────────────────────────────────────────────────────
 
 trigger: none
@@ -38,7 +40,21 @@ parameters:
   - name: moduleVersion
     displayName: 'nutanix_vm module version'
     type: string
-    default: '2.0.1'
+    default: '2.0.3'
+
+  - name: clusterName
+    displayName: 'Cluster name (lowercase) — selects Key Vault secret api-<clusterName>'
+    type: string
+    default: 'hob-cl-dev1'
+
+  - name: osType
+    displayName: 'Guest OS type (used by the smoke test)'
+    type: string
+    default: 'linux'
+    values:
+      - linux
+      - windows
+      - appliance
 
   - name: action
     displayName: 'Action'
@@ -70,7 +86,6 @@ stages:
 
           - template: deploy/step-terraform-download-module.yml
             parameters:
-              feedId: '{TerraformModules.Nutanix}'
               moduleVersion: ${{ parameters.moduleVersion }}
               workingDir: $(System.DefaultWorkingDirectory)/infra
 
@@ -88,7 +103,7 @@ stages:
               planArtifactName: tfplan-hob-${{ parameters.environment }}
               serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
               nutanixEndpoint: $(NUTANIX_ENDPOINT)
-              nutanixApiKey: $(NUTANIX_API_KEY)
+              clusterName: ${{ parameters.clusterName }}
               ${{ if eq(parameters.action, 'destroy') }}:
                 commandOptions: '-destroy -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan-hob-${{ parameters.environment }}.tfplan -var-file="config/${{ parameters.environment }}.tfvars"'
 
@@ -161,7 +176,6 @@ stages:
 
           - template: deploy/step-terraform-download-module.yml
             parameters:
-              feedId: '{TerraformModules.Nutanix}'
               moduleVersion: ${{ parameters.moduleVersion }}
               workingDir: $(System.DefaultWorkingDirectory)/infra
 
@@ -177,7 +191,7 @@ stages:
               planArtifactName: tfplan-hob-${{ parameters.environment }}
               serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
               nutanixEndpoint: $(NUTANIX_ENDPOINT)
-              nutanixApiKey: $(NUTANIX_API_KEY)
+              clusterName: ${{ parameters.clusterName }}
               sysprepWin2025: $(SYSPREP_WIN2025)
               sysprepWin2022: $(SYSPREP_WIN2022)
 
@@ -197,25 +211,53 @@ stages:
         steps:
           - checkout: self
 
+          # `terraform output` reads from state, so this stage needs the same
+          # module download + backend init as plan/apply. Previously it ran
+          # `terraform output` with no init and no backend, so both outputs
+          # resolved to empty strings and (with continueOnError) the failure was
+          # invisible.
+          - template: deploy/step-terraform-download-module.yml
+            parameters:
+              moduleVersion: ${{ parameters.moduleVersion }}
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+
+          - template: deploy/step-terraform-init.yml
+            parameters:
+              workingDir: $(System.DefaultWorkingDirectory)/infra
+              environment: ${{ parameters.environment }}
+              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+
           - bash: |
               set -e
               cd $(System.DefaultWorkingDirectory)/infra
               VM_NAME=$(terraform output -raw vm_name 2>/dev/null || echo "")
-              VM_IP=$(terraform output -raw vm_ip 2>/dev/null || echo "")
-              echo "Detected VM: $VM_NAME ($VM_IP)"
+              echo "Detected VM: $VM_NAME"
               echo "##vso[task.setvariable variable=VM_NAME]$VM_NAME"
-              echo "##vso[task.setvariable variable=VM_IP]$VM_IP"
             displayName: 'Read VM outputs from Terraform state'
 
           - bash: |
-              set -e
               chmod +x scripts/smoke-test.sh
-              # os-type hardcoded to "windows" for HOB pilot.
-              # Sprint 3: make dynamic from module output.
+              # OS type comes from the pipeline parameter (was hardcoded
+              # "windows"); this pilot VM is Linux.
+              #
+              # vm_ip is deliberately NOT passed. The module returns null for it
+              # by design: Prism Central only reports a learned guest IP when NGT
+              # or an equivalent guest agent is present, and the Rocky
+              # GenericCloud image does not ship NGT. The smoke test skips its IP
+              # reachability check when no IP is given. Do NOT "fix" this by
+              # adding a retry loop — there will never be an IP to reach here.
+              set +e
               ./scripts/smoke-test.sh \
-                --vm-name    "$(VM_NAME)" \
-                --vm-ip      "$(VM_IP)" \
-                --os-type    "windows" \
+                --vm-name     "$(VM_NAME)" \
+                --os-type     "${{ parameters.osType }}" \
                 --is-override "false"
-            displayName: 'Run smoke test (RDP/naming check)'
+              rc=$?
+              # Keep continueOnError (a smoke-test failure must not roll back a
+              # good apply at this stage) but surface the failure explicitly as a
+              # warning annotation so it is visible, not silently swallowed.
+              if [ "$rc" -ne 0 ]; then
+                echo "##vso[task.logissue type=warning]Smoke test failed (exit $rc) — see output above."
+              fi
+              exit $rc
+            displayName: 'Run smoke test (naming check)'
             continueOnError: true

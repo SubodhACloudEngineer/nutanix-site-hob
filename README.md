@@ -42,7 +42,17 @@ Merge the approved PR to `main`. The pipeline picks up the merge commit, plans, 
 
 ## Module source
 
-The `nutanix_vm` module is published as a Universal Package to the Azure Artifacts feed in the *Cloud Center of Excellence* ADO project. The `deploy/step-terraform-download-module.yml` step template downloads the pinned version into `infra/modules/nutanix_vm/` at pipeline run time.
+The `nutanix_vm` module is published as a Universal Package to the Azure Artifacts feed in the *Cloud Center of Excellence* ADO project. The `deploy/step-terraform-download-module.yml` step template downloads the pinned version into `infra/modules/nutanix_vm/` at pipeline run time. `infra/main.tf` therefore references the module at `source = "./modules/nutanix_vm"`.
+
+### Local development
+
+For local `terraform` runs the module must resolve at the same path the pipeline uses — `infra/modules/nutanix_vm`. Copy or symlink your `nutanix-terraform-modules` checkout into place, for example:
+
+```bash
+ln -s ../../nutanix-terraform-modules/nutanix_vm infra/modules/nutanix_vm
+```
+
+`infra/modules/` is excluded by `.gitignore`, so the copied or symlinked module is never committed.
 
 ## Environment variable files
 

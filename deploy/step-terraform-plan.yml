@@ -23,12 +23,29 @@ parameters:
     type: string
     displayName: 'Prism Central VIP'
 
-  - name: nutanixApiKey
+  - name: clusterName
     type: string
-    displayName: 'Prism Central API key'
-    secret: true
+    displayName: 'Cluster name (lowercase) selecting the Key Vault secret api-<clusterName>'
 
 steps:
+  # Fetch the Prism Central API key from Azure Key Vault before Terraform runs.
+  # The secret follows the convention api-<cluster-name> (e.g. api-hob-cl-dev1),
+  # so the same template serves future clusters without a per-site variable
+  # group. The task creates a pipeline variable named after the secret, consumed
+  # below as TF_VAR_nutanix_api_key.
+  #
+  # RBAC: azu-nutanix-kv-prd is RBAC-based, not access-policy based. The service
+  # principal behind the service connection needs the "Key Vault Secrets User"
+  # role. Without it this task fails with a Forbidden error that reads like a
+  # missing secret rather than a missing role assignment.
+  - task: AzureKeyVault@2
+    displayName: 'Fetch Prism Central API key'
+    inputs:
+      azureSubscription: '${{ parameters.serviceConnectionName }}'
+      KeyVaultName: 'azu-nutanix-kv-prd'
+      SecretsFilter: 'api-${{ parameters.clusterName }}'
+      RunAsPreJob: false
+
   - task: TerraformTaskV4@4
     displayName: 'terraform validate'
     inputs:
@@ -49,7 +66,7 @@ steps:
       environmentServiceNameAzureRM: '${{ parameters.serviceConnectionName }}'
     env:
       TF_VAR_nutanix_pc_endpoint: ${{ parameters.nutanixEndpoint }}
-      TF_VAR_nutanix_api_key: ${{ parameters.nutanixApiKey }}
+      TF_VAR_nutanix_api_key: $(api-${{ parameters.clusterName }})
 
   - task: PublishBuildArtifacts@1
     displayName: 'Publish plan artifact'
