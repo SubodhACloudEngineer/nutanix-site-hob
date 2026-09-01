@@ -16,14 +16,17 @@ locals {
 # allocation (open design question OQ-04) and is out of scope — one VM proves
 # the delivery chain end to end.
 module "hob_as_0001" {
-  # TEMPORARY local source for development on hob-mg-1009. Once the
-  # IS.NUTANIXDEV build service is granted AddPackage on the Azure Artifacts
-  # feed, the module will be consumed from that feed
-  # (TerraformModules.Nutanix, version 2.0.1). The pipeline's
-  # deploy/step-terraform-download-module.yml step already fetches the module
-  # to ./modules/nutanix_vm; only local development uses this relative path,
-  # which assumes nutanix-terraform-modules is checked out beside this repo.
-  source = "../../nutanix-terraform-modules/nutanix_vm"
+  # The pipeline's deploy/step-terraform-download-module.yml step downloads the
+  # nutanix_vm package (version 2.0.3, pinned by the moduleVersion parameter)
+  # from the CCoE Azure Artifacts feed and extracts it to
+  # infra/modules/nutanix_vm, which .gitignore excludes from commits. For local
+  # development, copy or symlink your nutanix-terraform-modules checkout to
+  # infra/modules/nutanix_vm (see the repository README).
+  #
+  # NOTE: no Terraform `version` argument is set here. `version` is only valid
+  # for module-registry sources; Terraform rejects it on a local path source
+  # like ./modules/nutanix_vm. The version is pinned by the pipeline download.
+  source = "./modules/nutanix_vm"
 
   # Location and project — from config/dev.tfvars
   UMICORE_LOCATION = var.UMICORE_LOCATION

@@ -4,7 +4,7 @@ infra/modules/
 # Terraform local state and cache
 .terraform/
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
 
 # NOTE: .terraform.lock.hcl is intentionally NOT ignored and IS committed.
 # Gitignoring the lock file is correct for a shared module library, but wrong

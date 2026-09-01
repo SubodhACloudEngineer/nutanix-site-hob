@@ -1,12 +1,8 @@
 parameters:
-  - name: feedId
-    type: string
-    displayName: 'Azure Artifacts feed ID'
-
   - name: moduleVersion
     type: string
     displayName: 'nutanix_vm module version to download'
-    default: '1.0.0'
+    default: '2.0.3'
 
   - name: workingDir
     type: string
@@ -22,7 +18,19 @@ steps:
     inputs:
       command: download
       downloadDirectory: '${{ parameters.workingDir }}/modules'
-      vstsFeed: '${{ parameters.feedId }}'
+      # Project-qualified feed. The package lives in the TerraformModules.Nutanix
+      # feed in the "Cloud Center of Excellence" project, but THIS repo is in
+      # IS.NUTANIXDEV, so the bare feed name would resolve in the wrong project
+      # and fail. The download task input is `vstsFeed` (not vstsFeedPublish).
+      #
+      # The IS.NUTANIXDEV build service ALSO needs read access on this feed:
+      # cross-project feed permissions are not automatic, and the failure
+      # presents as a 403 at download time rather than a clear permission error.
+      #
+      # NOTE: the "Project/Feed" display-name syntax is not accepted by every
+      # version of UniversalPackages@0 — some require the project GUID instead.
+      # If the first run fails with feed-not-found, substitute the GUID.
+      vstsFeed: 'Cloud Center of Excellence/TerraformModules.Nutanix'
       vstsPackage: 'nutanix_vm'
       vstsPackageVersion: '${{ parameters.moduleVersion }}'
 
