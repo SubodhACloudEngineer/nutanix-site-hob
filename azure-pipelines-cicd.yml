@@ -5,17 +5,23 @@
 #           What the reviewer approves is EXACTLY what gets applied
 #           (frozen plan artifact — no re-planning at apply time).
 #
-# APPROVAL TIERS (Section 8.7.1 of design document):
-#   prd — Full team gate, 60-minute timeout
-#   acc — Single approver, 30-minute timeout
-#   tst — Auto-approve (gate disabled)
-#   dev — Auto-approve (gate disabled)
+# APPROVAL MODEL:
+#   Every environment has an approval gate configured on its ADO environment
+#   resource (Pipelines -> Environments -> nutanix-hob-<env> -> Approvals and
+#   checks). There is NO auto-approve and no per-tier risk gradient: all Nutanix
+#   clusters are production hardware regardless of the environment label
+#   (HOB-CL-DEV1 is a sandbox by naming convention only). The environment
+#   dimension describes workload classification and state-file separation, not
+#   an infrastructure or risk boundary. The Apply stage is a deployment job
+#   bound to its environment, so it cannot start until that gate passes.
 #
 # BEFORE RUNNING: ensure the variable group 'nutanix-hob-credentials' exists
 # in ADO (Pipelines → Library) and contains:
 #   NUTANIX_ENDPOINT         — Prism Central VIP for HOB (OQ NW-02 pending)
 #   AZURE_SERVICE_CONNECTION — Azure RM service connection name
-#   INFRA_TEAM_EMAIL         — notification address for prd/acc approval gates
+#   INFRA_TEAM_EMAIL         — currently UNUSED (environment approvals notify
+#                              their own configured approvers); retained so the
+#                              variable group contract stays intact.
 # The Prism Central API key is fetched at run time from Azure Key Vault
 # (azu-nutanix-kv-prd, secret api-<clusterName>) by the plan and apply step
 # templates, not from this variable group. The backend resource group, storage
@@ -107,95 +113,48 @@ stages:
               ${{ if eq(parameters.action, 'destroy') }}:
                 commandOptions: '-destroy -input=false -out=$(Build.ArtifactStagingDirectory)/tfplan-hob-${{ parameters.environment }}.tfplan -var-file="config/${{ parameters.environment }}.tfvars"'
 
-# ── Stage 2: Approve (environment-based gate) ─────────────────────────────────
-
-  - stage: Approve
-    displayName: 'Approve — ${{ parameters.environment }}'
-    dependsOn: Plan
-    condition: succeeded()
-    jobs:
-      # prd: full team gate, 60-minute timeout
-      - ${{ if eq(parameters.environment, 'prd') }}:
-        - job: WaitForApproval
-          displayName: 'Awaiting production approval'
-          pool: server
-          steps:
-            - task: ManualValidation@0
-              displayName: 'Manual approval — HOB PRODUCTION'
-              timeoutInMinutes: 60
-              inputs:
-                notifyUsers: $(INFRA_TEAM_EMAIL)
-                instructions: |
-                  Review the plan artifact tfplan-hob-prd. Confirm all
-                  10 Nutanix categories are correct, especially Backup (drives Veeam).
-                  Confirm cluster and subnet are correct for HOB production.
-
-      # acc: single approver, 30-minute timeout
-      - ${{ if eq(parameters.environment, 'acc') }}:
-        - job: WaitForApproval
-          displayName: 'Awaiting acceptance approval'
-          pool: server
-          steps:
-            - task: ManualValidation@0
-              displayName: 'Manual approval — HOB ACCEPTANCE'
-              timeoutInMinutes: 30
-              inputs:
-                notifyUsers: $(INFRA_TEAM_EMAIL)
-                instructions: |
-                  Review the plan artifact tfplan-hob-acc before approving.
-                  Confirm all 10 Nutanix categories are correct, especially Backup (drives Veeam).
-                  Confirm cluster and subnet are correct for HOB acceptance.
-
-      # tst/dev: auto-approve — gate is a no-op succeed-immediately job
-      - ${{ if or(eq(parameters.environment, 'tst'), eq(parameters.environment, 'dev')) }}:
-        - job: AutoApprove
-          displayName: 'Auto-approve (${{ parameters.environment }} — gate disabled)'
-          steps:
-            - bash: echo "Environment ${{ parameters.environment }} does not require manual approval."
-              displayName: 'Gate skipped (auto-approve)'
-
-# ── Stage 3: Apply ────────────────────────────────────────────────────────────
+# ── Stage 2: Apply ────────────────────────────────────────────────────────────
+# The approval gate is the ADO environment's responsibility (Approvals and
+# checks on nutanix-hob-<environment>), applied uniformly to every environment.
+# There is no separate Approve stage and no conditional that can skip a gate.
 
   - stage: Apply
     displayName: 'Apply — ${{ parameters.environment }}'
-    dependsOn: Approve
-    condition: >-
-      and(
-        succeeded(),
-        or(
-          eq('${{ parameters.environment }}', 'tst'),
-          eq('${{ parameters.environment }}', 'dev'),
-          succeeded('Approve')
-        )
-      )
+    dependsOn: Plan
+    condition: succeeded()
     jobs:
-      - job: TerraformApply
+      - deployment: TerraformApply
         displayName: 'terraform apply'
-        steps:
-          - checkout: self
+        # Binding to the environment is what enforces approval: the deployment
+        # job will not start until the environment's approvals/checks pass, so
+        # there is no window where apply begins before approval completes.
+        environment: 'nutanix-hob-${{ parameters.environment }}'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
 
-          - template: deploy/step-terraform-download-module.yml
-            parameters:
-              moduleVersion: ${{ parameters.moduleVersion }}
-              workingDir: $(System.DefaultWorkingDirectory)/infra
+                - template: deploy/step-terraform-download-module.yml
+                  parameters:
+                    moduleVersion: ${{ parameters.moduleVersion }}
+                    workingDir: $(System.DefaultWorkingDirectory)/infra
 
-          - template: deploy/step-terraform-init.yml
-            parameters:
-              workingDir: $(System.DefaultWorkingDirectory)/infra
-              environment: ${{ parameters.environment }}
-              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+                - template: deploy/step-terraform-init.yml
+                  parameters:
+                    workingDir: $(System.DefaultWorkingDirectory)/infra
+                    environment: ${{ parameters.environment }}
+                    serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
 
-          - template: deploy/step-terraform-apply.yml
-            parameters:
-              workingDir: $(System.DefaultWorkingDirectory)/infra
-              planArtifactName: tfplan-hob-${{ parameters.environment }}
-              serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
-              nutanixEndpoint: $(NUTANIX_ENDPOINT)
-              clusterName: ${{ parameters.clusterName }}
-              sysprepWin2025: $(SYSPREP_WIN2025)
-              sysprepWin2022: $(SYSPREP_WIN2022)
+                - template: deploy/step-terraform-apply.yml
+                  parameters:
+                    workingDir: $(System.DefaultWorkingDirectory)/infra
+                    planArtifactName: tfplan-hob-${{ parameters.environment }}
+                    serviceConnectionName: $(AZURE_SERVICE_CONNECTION)
+                    nutanixEndpoint: $(NUTANIX_ENDPOINT)
+                    clusterName: ${{ parameters.clusterName }}
 
-# ── Stage 4: Smoke Test ───────────────────────────────────────────────────────
+# ── Stage 3: Smoke Test ───────────────────────────────────────────────────────
 
   - stage: SmokeTest
     displayName: 'Smoke Test — ${{ parameters.environment }}'
