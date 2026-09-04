@@ -19,15 +19,11 @@ parameters:
     type: string
     displayName: 'Cluster name (lowercase) selecting the Key Vault secret api-<clusterName>'
 
-  - name: sysprepWin2025
-    type: string
-    displayName: 'Sysprep unattend XML for Windows Server 2025'
-    secret: true
-
-  - name: sysprepWin2022
-    type: string
-    displayName: 'Sysprep unattend XML for Windows Server 2022'
-    secret: true
+  # Windows guest customisation (Sysprep) is deferred and intentionally has no
+  # parameters here. It is a template-path feature, and the template path cannot
+  # currently apply Nutanix categories in provider 2.4.2 (an open item with
+  # Nutanix support). The HOB pilot deploys Linux via cloud-init, which the
+  # module wires from infra/main.tf — not from this template.
 
   - name: sysprepRhel9
     type: string
@@ -68,13 +64,13 @@ steps:
       provider: azurerm
       command: apply
       workingDirectory: '${{ parameters.workingDir }}'
+      # Applying a SAVED plan file needs no approval flag — Terraform applies it
+      # directly without prompting, so -auto-approve is omitted (it is only
+      # meaningful when planning at apply time, which this stage never does).
       commandOptions: >-
         -input=false
-        -auto-approve
         $(Build.ArtifactStagingDirectory)/${{ parameters.planArtifactName }}/${{ parameters.planArtifactName }}.tfplan
       environmentServiceNameAzureRM: '${{ parameters.serviceConnectionName }}'
     env:
       TF_VAR_nutanix_pc_endpoint: ${{ parameters.nutanixEndpoint }}
       TF_VAR_nutanix_api_key: $(api-${{ parameters.clusterName }})
-      TF_VAR_sysprep_win2025: ${{ parameters.sysprepWin2025 }}
-      TF_VAR_sysprep_win2022: ${{ parameters.sysprepWin2022 }}
